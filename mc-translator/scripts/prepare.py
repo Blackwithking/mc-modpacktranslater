@@ -2,7 +2,7 @@
 """
 prepare.py - 物理准备与备份模块 (Phase 1)
 接收目标整合包路径作为参数，执行：
-1. 目录扫描，生成 file_tree.json
+1. 目录扫描，生成 file_tree.json 和 file_summary.json
 2. JAR 只读解包，提取 en_us.json / en_US.lang
 3. 全量安全备份至 _lang_backup/
 """
@@ -13,6 +13,7 @@ import json
 import zipfile
 import shutil
 import hashlib
+from collections import defaultdict
 from pathlib import Path
 
 TARGET_DIR = Path(sys.argv[1]).resolve()
@@ -41,6 +42,34 @@ def scan_directory(target: Path) -> list:
                 "ext": full_path.suffix.lower(),
             })
     return file_tree
+
+
+def generate_file_summary(file_tree: list, target: Path) -> dict:
+    """按扩展名分组统计，生成可读的文件类型概览，让大模型一目了然哪些文件需要处理"""
+    TARGET_EXTS = {".json", ".lang", ".snbt", ".js", ".zs", ".cfg", ".toml"}
+
+    by_ext = defaultdict(lambda: {"count": 0, "samples": []})
+
+    for entry in file_tree:
+        ext = entry["ext"]
+        if ext in TARGET_EXTS:
+            by_ext[ext]["count"] += 1
+            if len(by_ext[ext]["samples"]) < 5:
+                by_ext[ext]["samples"].append(entry["path"])
+
+    # 补充 _temp_extracted 中解包出的语言文件
+    temp_dir = target / "_temp_extracted"
+    if temp_dir.is_dir():
+        for f in temp_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in (".json", ".lang"):
+                by_ext[f.suffix.lower()]["count"] += 1
+                if len(by_ext[f.suffix.lower()]["samples"]) < 5:
+                    by_ext[f.suffix.lower()]["samples"].append(
+                        str(f.relative_to(target)).replace("\\", "/")
+                    )
+
+    # 按 count 降序排列，便于直观看到哪些类型最多
+    return dict(sorted(by_ext.items(), key=lambda x: x[1]["count"], reverse=True))
 
 
 def extract_jar_lang_files(jar_path: Path, modid: str):
@@ -147,7 +176,17 @@ def main():
     TEMP_EXTRACTED.mkdir(parents=True, exist_ok=True)
     find_and_extract_jars(TARGET_DIR)
 
-    # 3. 全量备份
+    # 3. 生成文件类型概览（在解包之后，含 _temp_extracted 统计）
+    print("[汇总] 生成 file_summary.json ...")
+    file_summary = generate_file_summary(file_tree, TARGET_DIR)
+    summary_path = TARGET_DIR / "file_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(file_summary, f, ensure_ascii=False, indent=2)
+    print(f"  -> 待翻译文件类型分布:")
+    for ext, info in file_summary.items():
+        print(f"     {ext}: {info['count']} 个")
+
+    # 4. 全量备份
     print("[备份] 全量安全备份 ...")
     backup_manifest = backup_files(TARGET_DIR)
     backup_manifest["created_at"] = str(Path())

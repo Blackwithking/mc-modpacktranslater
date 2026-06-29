@@ -10,8 +10,8 @@ trigger: 当用户要求"翻译整合包"、"汉化"时触发。
 
 ## 路径定义
 
-- **SCRIPTS_DIR**: 本插件脚本目录的绝对路径 (`C:\Users\admin\Documents\mc-modpacktranslater\mc-translator\scripts\`)
-- **GLOSSARY_PATH**: 本插件 CSV 术语表的绝对路径 (`C:\Users\admin\Documents\mc-modpacktranslater\mc-translator\glossary.csv`)
+- **SCRIPTS_DIR**: 本插件脚本目录的绝对路径 
+- **GLOSSARY_PATH**: 本插件 CSV 术语表的绝对路径 
 - **TARGET_DIR**: 用户当前工作区的绝对路径。
 
 ## 步骤 1：物理准备与备份
@@ -22,13 +22,33 @@ trigger: 当用户要求"翻译整合包"、"汉化"时触发。
 python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 ```
 
-等待脚本执行完成，确认生成了 `file_tree.json`、`_lang_backup/` 目录及其中的 `backup_manifest.json`。
+等待脚本执行完成，确认生成了 `file_tree.json`、`file_summary.json`、`_lang_backup/` 目录及其中的 `backup_manifest.json`。
 
-## 步骤 2：智能提取 (生成 JSONL)
+## 步骤 2：文件类型确认（防止遗漏）
 
-读取 `{TARGET_DIR}/file_tree.json`，根据文件类型差异提取玩家可见文本：
+**在开始提取之前，必须先读取 `{TARGET_DIR}/file_summary.json`**。该文件按扩展名分组统计了所有待翻译文件。
 
-### 文件类型处理策略
+你将看到类似这样的内容：
+
+```json
+{
+  ".json": {"count": 320, "samples": ["_temp_extracted/minecraft/lang/en_us.json", ...]},
+  ".snbt": {"count": 45, "samples": ["config/ftbquests/quests/chapter1.snbt", ...]},
+  ".js":   {"count": 12, "samples": ["kubejs/server_scripts/main.js", ...]},
+  ".zs":   {"count": 3,  "samples": [...]},
+  ".lang": {"count": 8,  "samples": [...]},
+  ".cfg":  {"count": 2,  "samples": [...]},
+  ".toml": {"count": 1,  "samples": [...]}
+}
+```
+
+**你必须逐类型确认**：检查每种扩展名对应的文件数量，确保后续提取不会遗漏。特别注意 `.snbt`（FTB Quests 任务文件）、`.js`（KubeJS 脚本）、`.zs`（CraftTweaker 脚本），这些是最容易被忽略的。
+
+## 步骤 3：智能提取 (生成 JSONL)
+
+根据 `file_summary.json` 确认所有文件类型后，开始逐类型读取文件内容并提取玩家可见文本。
+
+### 文件类型处理策略（下列每个都在 `{TARGET_DIR}` 中检查）
 
 1. **模组语言文件** (路径包含 `assets/*/lang/` 的 `.json` 或 `.lang`)：
    - JSON 格式：提取所有 value
@@ -38,7 +58,7 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 2. **KubeJS 脚本** (`.js`)：
    - 仅提取字符串字面量（引号内的文本），**排除**变量名、函数名、方法链、事件名
    - 使用 `context_hint` 记录行号（如 `"line: 42"`）
-   - 示例：`Player.tell("Hello")` → 只提取 `"Hello"`，`Player` 和 `tell` 不提取
+   - 示例：`Player.tell("Hello")` -> 只提取 `"Hello"`，`Player` 和 `tell` 不提取
 
 3. **CraftTweaker 脚本** (`.zs`)：
    - 仅提取 `translate("...")` 调用的参数、`<language:...>` 内容
@@ -46,7 +66,8 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 
 4. **SNBT/配置文件** (`.snbt`, `.toml`, `.cfg`)：
    - 提取 `title`, `description`, `name`, `subtitle` 等字段的字符串值
-   - FTB Quests: 提取 `title:"..."` 和 `description:["..."]` 中的文本
+   - **FTB Quests (.snbt)**：重点检查 `config/ftbquests/` 目录，提取 `title:"..."` 和 `description:["..."]` 中的文本
+   - 使用 `context_hint` 记录行号
 
 5. **其他**：
    - 只提取明显是玩家可见的字符串
@@ -70,11 +91,13 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 - `status`：初始为 `"pending"`
 - `context_hint`：**极其重要**。对于代码文件（`.js`/`.zs`/`.snbt`），必须记录行号或唯一的前后文锚点，格式如 `"line: 42"` 或 `"前文: 'context_before' 后文: 'context_after'"`。这帮助回写脚本精准定位替换位置，避免误改变量名/函数名。
 
-## 步骤 3：逐批翻译
+**提取完毕后自检**：用 `file_summary.json` 中的数量对比你实际处理的文件数，如果某类型你处理的数量远少于应有数量，必须回溯补充。
+
+## 步骤 4：逐批翻译
 
 每次从 `translation_tasks.jsonl` 读取至少 **200 行**，按以下流程处理：
 
-### 3.1 调用查表脚本
+### 4.1 调用查表脚本
 
 ```powershell
 python "{SCRIPTS_DIR}glossary_lookup.py" "{TARGET_DIR}/translation_tasks.jsonl" --ids <起始ID>-<结束ID>
@@ -87,7 +110,7 @@ python "{SCRIPTS_DIR}glossary_lookup.py" "{TARGET_DIR}/translation_tasks.jsonl" 
 {"id": 2, "translations": []}
 ```
 
-### 3.2 结合语境翻译
+### 4.2 结合语境翻译
 
 - 对于有术语匹配的条目，根据完整语境选择最合适的释义
 - 对于无匹配的条目，根据语境自行翻译
@@ -100,7 +123,7 @@ python "{SCRIPTS_DIR}glossary_lookup.py" "{TARGET_DIR}/translation_tasks.jsonl" 
 - 保持原始大小写风格（标题大写、全部小写等）
 - 模组物品名、专有名词保持原样或使用社区通用译名
 
-### 3.3 安全更新 JSONL
+### 4.3 安全更新 JSONL
 
 根据 ID **原地更新** `translation_tasks.jsonl` 中对应行的 `translated` 字段，`status` 改为 `"done"`。
 
@@ -132,7 +155,7 @@ with open(jsonl_path, "w", encoding="utf-8") as f:
 
 重复此步骤直到所有条目状态为 `"done"`。
 
-## 步骤 4：安全回写与资源生成
+## 步骤 5：安全回写与资源生成
 
 执行回写脚本：
 
@@ -147,7 +170,7 @@ python "{SCRIPTS_DIR}generate_assets.py" "{TARGET_DIR}"
 4. 跳过已有 `zh_cn.json`/`zh_CN.lang` 的模组
 5. 对代码文件：利用 `context_hint` 锚点进行精确字符串替换，不破坏代码语法
 
-## 步骤 5：报告与兜底提示
+## 步骤 6：报告与兜底提示
 
 向用户报告完成情况：
 
@@ -160,8 +183,6 @@ python "{SCRIPTS_DIR}generate_assets.py" "{TARGET_DIR}"
 - 资源输出：KubeJS 模式 / 兜底资源包模式
 
 提示：翻译已应用。如果进游戏发现报错，可随时对我说"执行回滚"，
-或手动运行以下命令恢复原状：
+或手动运行以下命令恢复原状（不推荐）：
 python {SCRIPTS_DIR}rollback.py "{TARGET_DIR}"
 ```
-
-
