@@ -31,6 +31,19 @@ def check_kubejs(target: Path) -> bool:
     return False
 
 
+
+def sanitize_modid(modid: str) -> str:
+    """Sanitize modid to only allow Minecraft ResourceLocation chars [a-z0-9_.-]"""
+    # to lowercase
+    modid = modid.lower()
+    # replace spaces/special chars with underscore
+    modid = re.sub(r'[^a-z0-9_.-]', '_', modid)
+    # collapse consecutive underscores
+    modid = re.sub(r'_+', '_', modid)
+    # strip leading/trailing special chars
+    modid = modid.strip('_.-')
+    return modid if modid else 'unknown'
+
 def extract_modid(source_file: str) -> str:
     """从语言文件路径中提取 modid"""
     # 匹配 assets/<modid>/lang/ 模式
@@ -40,7 +53,7 @@ def extract_modid(source_file: str) -> str:
     # 从 jar 解压路径提取
     m = re.search(r"_temp_extracted/([^/]+)/", source_file)
     if m:
-        return m.group(1)
+        return sanitize_modid(m.group(1))
     return "unknown"
 
 
@@ -282,3 +295,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
