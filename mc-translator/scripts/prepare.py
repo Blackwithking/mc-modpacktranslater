@@ -43,7 +43,7 @@ def scan_directory(target: Path) -> list:
     return file_tree
 
 
-def extract_jar_lang_files(jar_path: Path):
+def extract_jar_lang_files(jar_path: Path, modid: str):
     """从 JAR 包中只读提取语言文件到 _temp_extracted/"""
     output_dir = TEMP_EXTRACTED / modid / "lang"
     output_dir.mkdir(parents=True, exist_ok=True)
