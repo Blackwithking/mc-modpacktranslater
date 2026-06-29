@@ -1,0 +1,18 @@
+﻿{
+  "name": "mc-translator",
+  "version": "1.0.0",
+  "description": "Minecraft 整合包智能本地化插件 - 采用混合架构（脚本负责物理操作，大模型负责语义理解），实现整合包全量文本的安全、智能、低成本翻译。",
+  "author": {
+    "name": "mc-translator"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MC 整合包翻译器",
+    "shortDescription": "智能提取并翻译 Minecraft 整合包，支持 KubeJS, CraftTweaker, FTBQuests 及各版本模组。",
+    "longDescription": "一款采用混合架构的 Minecraft 整合包本地化插件。Python 脚本负责解压、备份、术语查表及安全回写；大模型负责识别代码中玩家可见的文本并翻译。支持 KubeJS 优先方案及标准资源包兜底机制，提供全量备份与一键回滚。",
+    "developerName": "mc-translator",
+    "category": "Productivity",
+    "capabilities": ["translation", "minecraft"],
+    "defaultPrompt": "帮我翻译这个整合包"
+  }
+}
