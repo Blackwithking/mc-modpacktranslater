@@ -42,11 +42,28 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 }
 ```
 
-**你必须逐类型确认**：检查每种扩展名对应的文件数量，确保后续提取不会遗漏。特别注意 `.snbt`（FTB Quests 任务文件）、`.js`（KubeJS 脚本）、`.zs`（CraftTweaker 脚本），这些是最容易被忽略的。
+**逐类型确认规则**：
+
+- `.json` / `.lang`（模组语言文件）→ 必须处理
+- `.snbt`（FTB Quests 任务）→ **必须处理**，不可跳过
+- `.js`（KubeJS 脚本）→ **必须处理**，不可跳过
+- `.zs`（CraftTweaker 脚本）→ **必须处理**，不可跳过
+- `.cfg` / `.toml`（配置文件）→ 检查后处理
+
+**如果 file_summary 中某类型 count > 0，则对应的 JSONL 条目也必须 > 0。跳过 JS/SNBT 会导致任务文本、脚本提示、界面文字严重缺失，这是不可接受的。**
 
 ## 步骤 3：智能提取 (生成 JSONL)
 
-根据 `file_summary.json` 确认所有文件类型后，开始逐类型读取文件内容并提取玩家可见文本。
+根据 `file_summary.json` 确认所有文件类型后，逐类型读取文件内容并提取玩家可见文本。
+
+### 代码文件安全说明（重要）
+
+对于 `.js` / `.zs` / `.snbt` 这类代码文件，你可能会担心替换时破坏语法。请放心——整个安全链条有两道保险：
+
+1. **你在提取时填入 `context_hint`**（如 `"line: 42"` 或前后文锚点）
+2. **`generate_assets.py` 的 `safe_string_replace` 函数**优先使用行号定位，只替换指定行内的匹配文本；行号失效才回退到全局精确替换，且只替换**第一次出现**
+
+因此，只要你准确填写了 `context_hint`（尤其是行号），回写就非常安全。**不要因为担心破坏代码而跳过 JS/SNBT 文件——这会导致大量玩家可见文本丢失。**
 
 ### 文件类型处理策略（下列每个都在 `{TARGET_DIR}` 中检查）
 
@@ -56,17 +73,19 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
    - 记录 `source_file` 为相对路径，`key` 为键名
 
 2. **KubeJS 脚本** (`.js`)：
-   - 仅提取字符串字面量（引号内的文本），**排除**变量名、函数名、方法链、事件名
-   - 使用 `context_hint` 记录行号（如 `"line: 42"`）
-   - 示例：`Player.tell("Hello")` -> 只提取 `"Hello"`，`Player` 和 `tell` 不提取
+   - 读取每个 `.js` 文件，逐行检查字符串字面量（单引号或双引号内的文本）
+   - 提取原则：**只要是人类能读懂的英文句子/短语，就提取**
+   - 排除：纯变量名（如 `"player"`）、事件名（如 `"server.tick"`）、注册 ID（如 `"minecraft:stick"`）、单字符或纯数字字符串
+   - `key` 填 `"line:N"`（N 为行号），`context_hint` 填 `"line: N"` 加前后各 10 个字符的原文片段
+   - 示例：`Player.tell("Welcome to the server!")` → `original: "Welcome to the server!"`, `context_hint: "line: 42"`
 
 3. **CraftTweaker 脚本** (`.zs`)：
    - 仅提取 `translate("...")` 调用的参数、`<language:...>` 内容
    - 排除 `import`, `val`, `var`, 函数参数名等语法结构
 
 4. **SNBT/配置文件** (`.snbt`, `.toml`, `.cfg`)：
-   - 提取 `title`, `description`, `name`, `subtitle` 等字段的字符串值
-   - **FTB Quests (.snbt)**：重点检查 `config/ftbquests/` 目录，提取 `title:"..."` 和 `description:["..."]` 中的文本
+   - 提取 `title`, `description`, `name`, `subtitle`, `text`, `tooltip` 等字段的字符串值
+   - **FTB Quests (.snbt)**：必须检查 `config/ftbquests/` 下所有 `.snbt` 文件，提取 `title:"..."` 和 `description:["..."]` 中的文本
    - 使用 `context_hint` 记录行号
 
 5. **其他**：
@@ -85,13 +104,13 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 **字段规范**：
 - `id`：从 1 开始递增的唯一整数
 - `source_file`：相对于整合包根目录的路径，使用正斜杠 `/`
-- `key`：语言键名（语言文件中），或代码中该文本的定位标识
+- `key`：语言键名（语言文件中），或代码中该文本的定位标识（如 `"line:42"`）
 - `original`：原文内容
 - `translated`：初始为空字符串
 - `status`：初始为 `"pending"`
-- `context_hint`：**极其重要**。对于代码文件（`.js`/`.zs`/`.snbt`），必须记录行号或唯一的前后文锚点，格式如 `"line: 42"` 或 `"前文: 'context_before' 后文: 'context_after'"`。这帮助回写脚本精准定位替换位置，避免误改变量名/函数名。
+- `context_hint`：**极其重要**。对于代码文件（`.js`/`.zs`/`.snbt`），必须记录行号，格式如 `"line: 42"`。对语言文件可为空字符串。
 
-**提取完毕后自检**：用 `file_summary.json` 中的数量对比你实际处理的文件数，如果某类型你处理的数量远少于应有数量，必须回溯补充。
+**提取完毕后自检**：逐类型对比 `file_summary.json` 的 count，确认每类文件都有对应条目进入 JSONL。如果某类型遗漏了，必须回溯读取并补充。
 
 ## 步骤 4：逐批翻译
 
@@ -172,17 +191,19 @@ python "{SCRIPTS_DIR}generate_assets.py" "{TARGET_DIR}"
 
 ## 步骤 6：报告与兜底提示
 
-向用户报告完成情况：
+向用户报告完成情况。**报告必须包含以下各项，缺一不可**：
 
 ```
 翻译完成！
 
-生成内容：
-- 语言文件翻译：X 个模组
-- 代码文件替换：X 个文件
+概览：
+- 语言文件翻译：X 个模组，Y 条
+- 代码文件替换：.js X 个文件，.snbt X 个文件，.zs X 个文件（必须逐类列出）
 - 资源输出：KubeJS 模式 / 兜底资源包模式
 
 提示：翻译已应用。如果进游戏发现报错，可随时对我说"执行回滚"，
 或手动运行以下命令恢复原状（不推荐）：
 python {SCRIPTS_DIR}rollback.py "{TARGET_DIR}"
 ```
+
+**如果某类代码文件（.js / .snbt / .zs）的替换数为 0，必须说明原因。**
