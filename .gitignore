@@ -1,1 +1,4 @@
-*.pyc
+﻿*.pyc
+Dict.json
+Dict-Mini.json
+*.pkl
