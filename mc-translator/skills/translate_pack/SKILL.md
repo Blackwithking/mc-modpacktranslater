@@ -54,7 +54,44 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 
 ## 步骤 3：智能提取 (生成 JSONL)
 
-根据 `file_summary.json` 确认所有文件类型后，逐类型读取文件内容并提取玩家可见文本。
+提取分两步：**先跑脚本粗提取**（正则/结构化，宁可多提不漏），**再人工精筛**（删除误提取、补充遗漏）。
+
+### 3.1 脚本粗提取
+
+```powershell
+python "{SCRIPTS_DIR}extract_texts.py" "{TARGET_DIR}"
+```
+
+该脚本自动提取以下内容，写入 `translation_tasks.jsonl`：
+
+| 类型 | 提取方式 | 可靠性 |
+|---|---|---|
+| 模组语言文件 `.json` | 全量 value，与已有 `zh_cn.json` 比 key，只提缺失 | ✅ 高 |
+| 模组语言文件 `.lang` | `key=value` 解析 | ✅ 高 |
+| FTB Quests `.snbt` | `title/subtitle/description/text` 正则，含多行数组 | ✅ 高 |
+| CraftTweaker `.zs` | `translate()/setName()/addTooltip()` 正则 | ✅ 高 |
+| KubeJS `.js` | **所有**字符串字面量（双引号/单引号/模板） | ⚠️ 粗提含大量误提取 |
+| 配置文件 `.toml/.cfg` | `key="value"` 和注释行 | ⚠️ 需筛 |
+
+等待脚本完成，确认生成了 `translation_tasks.jsonl`。
+
+### 3.2 模型精筛与补充
+
+脚本跑完后，你需要对 JSONL 进行审查：
+
+**删除误提取**（主要来自 JS 的粗提取）：
+- 纯变量名（`"player"`, `"stick"`）
+- 事件名（`"server.tick"`）
+- 注册 ID（`"minecraft:diamond"`）
+- 路径字符串（`"kubejs/assets/..."`）
+- 纯数字/纯符号字符串
+- 单字符字符串
+
+**检查遗漏**（对照 `file_summary.json`）：
+- `.snbt` 数量是否匹配
+- `.zs` 数量是否匹配
+- JS 文件中是否有脚本没提取到的玩家可见文本（如拼接字符串、动态生成的消息）
+- 补充遗漏的条目到 JSONL
 
 ### 代码文件安全说明（重要）
 
@@ -65,52 +102,24 @@ python "{SCRIPTS_DIR}prepare.py" "{TARGET_DIR}"
 
 因此，只要你准确填写了 `context_hint`（尤其是行号），回写就非常安全。**不要因为担心破坏代码而跳过 JS/SNBT 文件——这会导致大量玩家可见文本丢失。**
 
-### 文件类型处理策略（下列每个都在 `{TARGET_DIR}` 中检查）
+### JSONL 字段规范
 
-1. **模组语言文件** (路径包含 `assets/*/lang/` 的 `.json` 或 `.lang`)：
-   - JSON 格式：提取所有 value
-   - LANG 格式：提取 `key=value` 中的 value
-   - 记录 `source_file` 为相对路径，`key` 为键名
-
-2. **KubeJS 脚本** (`.js`)：
-   - 读取每个 `.js` 文件，逐行检查字符串字面量（单引号或双引号内的文本）
-   - 提取原则：**只要是人类能读懂的英文句子/短语，就提取**
-   - 排除：纯变量名（如 `"player"`）、事件名（如 `"server.tick"`）、注册 ID（如 `"minecraft:stick"`）、单字符或纯数字字符串
-   - `key` 填 `"line:N"`（N 为行号），`context_hint` 填 `"line: N"` 加前后各 10 个字符的原文片段
-   - 示例：`Player.tell("Welcome to the server!")` → `original: "Welcome to the server!"`, `context_hint: "line: 42"`
-
-3. **CraftTweaker 脚本** (`.zs`)：
-   - 仅提取 `translate("...")` 调用的参数、`<language:...>` 内容
-   - 排除 `import`, `val`, `var`, 函数参数名等语法结构
-
-4. **SNBT/配置文件** (`.snbt`, `.toml`, `.cfg`)：
-   - 提取 `title`, `description`, `name`, `subtitle`, `text`, `tooltip` 等字段的字符串值
-   - **FTB Quests (.snbt)**：必须检查 `config/ftbquests/` 下所有 `.snbt` 文件，提取 `title:"..."` 和 `description:["..."]` 中的文本
-   - 使用 `context_hint` 记录行号
-
-5. **其他**：
-   - 只提取明显是玩家可见的字符串
-
-### JSONL 输出
-
-在 `{TARGET_DIR}/` 下生成 `translation_tasks.jsonl` 文件。
-
-每行必须是一个严格的 JSON 对象，格式如下，**不要输出多余的逗号或破坏 JSON 结构**：
+脚本已生成的条目格式：
 
 ```jsonl
-{"id": 1, "source_file": "相对路径", "key": "键名", "original": "原文", "translated": "", "status": "pending", "context_hint": "上下文提示"}
+{"id": 1, "source_file": "相对路径", "key": "键名", "original": "原文", "translated": "", "status": "pending", "context_hint": ""}
 ```
 
 **字段规范**：
-- `id`：从 1 开始递增的唯一整数
+- `id`：从 1 开始递增的唯一整数（脚本已分配好）
 - `source_file`：相对于整合包根目录的路径，使用正斜杠 `/`
-- `key`：语言键名（语言文件中），或代码中该文本的定位标识（如 `"line:42"`）
+- `key`：语言键名（语言文件中），或代码中该文本的定位标识（如 `"line:42"` 或 `"desc[0]:L15"`）
 - `original`：原文内容
 - `translated`：初始为空字符串
 - `status`：初始为 `"pending"`
-- `context_hint`：**极其重要**。对于代码文件（`.js`/`.zs`/`.snbt`），必须记录行号，格式如 `"line: 42"`。对语言文件可为空字符串。
+- `context_hint`：脚本已预填行号（如 `"line: 42"`），精筛时如需补充或修正可以直接修改
 
-**提取完毕后自检**：逐类型对比 `file_summary.json` 的 count，确认每类文件都有对应条目进入 JSONL。如果某类型遗漏了，必须回溯读取并补充。
+**精筛完毕后自检**：逐类型对比 `file_summary.json` 的 count，确认每类文件都有对应条目进入 JSONL。如果某类型遗漏了，必须回溯读取并补充。
 
 ## 步骤 4：逐批翻译
 
